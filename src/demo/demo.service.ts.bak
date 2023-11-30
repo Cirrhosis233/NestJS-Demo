@@ -1,0 +1,168 @@
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { CreateUserDto } from './dto/create-user.dto';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
+import { User } from './entities/user.entity';
+import { Event } from './entities/event.entity';
+import { CreateEventDto } from './dto/create-event.dto';
+import { StatusType } from './entities/event.entity';
+
+@Injectable()
+export class DemoService {
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+    @InjectRepository(Event)
+    private readonly eventRepository: Repository<Event>,
+    private readonly dataSource: DataSource,
+  ) {}
+
+  async createUser(createUserDto: CreateUserDto) {
+    const user = this.userRepository.create(createUserDto);
+    return this.userRepository.save(user);
+  }
+
+  async findOneUser(id: string) {
+    const user = await this.userRepository.findOne({
+      where: { id },
+      relations: {
+        events: true,
+      },
+    });
+    if (!user) {
+      throw new NotFoundException(`User #${id} not found!`);
+    }
+    user.events = user.events.map((e) => e.title);
+    return user;
+  }
+
+  async removeUser(id: string) {
+    const user = await this.findOneUser(id);
+    return this.userRepository.remove(user);
+  }
+
+  async createEvent(createEventDto: CreateEventDto) {
+    // Retrive User[] from findOneUser API
+    const invitees = await Promise.all(
+      createEventDto.invitees.map((id) => this.findOneUser(id)),
+    );
+    const event = this.eventRepository.create({ ...createEventDto, invitees });
+    return this.eventRepository.save(event);
+  }
+
+  async findOneEvent(id: string) {
+    const event = await this.eventRepository.findOne({
+      where: { id },
+      relations: {
+        invitees: true,
+      },
+    });
+    if (!event) {
+      throw new NotFoundException(`Event #${id} not found!`);
+    }
+    return event;
+  }
+
+  async removeEvent(id: string) {
+    const event = await this.findOneEvent(id);
+    return this.eventRepository.remove(event);
+  }
+
+  async mergeAll(id: string) {
+    const user = await this.userRepository.findOne({
+      where: { id },
+      relations: {
+        events: {
+          invitees: true,
+        },
+      },
+      order: {
+        events: {
+          startTime: true,
+        },
+      },
+    });
+    if (!user) {
+      throw new NotFoundException(`User #${id} not found!`);
+    }
+    return await this.mergeEvents(user.events);
+  }
+
+  private async mergeEvents(events: Event[]) {
+    // console.log(events);
+    if (events.length === 0) {
+      return events;
+    }
+    // Establish Transaction
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    let prev: Event = events[0];
+    const toRemoveEvents: Set<string> = new Set();
+    const toUpdateEvents: Event[] = [prev];
+    for (let i = 1; i < events.length; i++) {
+      const curr: Event = events[i];
+      if (curr.startTime <= prev.endTime) {
+        toRemoveEvents.add(prev.id);
+        toRemoveEvents.add(curr.id);
+        prev.createdAt = null; // Mark Events that need to be created
+        prev.endTime = new Date(
+          Math.max(curr.endTime.getTime(), prev.endTime.getTime()),
+        );
+        prev.invitees = [
+          ...new Set([
+            ...prev.invitees.map((e) =>
+              JSON.stringify(e, Object.keys(e).sort()),
+            ),
+            ...curr.invitees.map((e) =>
+              JSON.stringify(e, Object.keys(e).sort()),
+            ),
+          ]),
+        ].map((e) => JSON.parse(e));
+        prev.title += ' & ' + curr.title;
+        if (curr.description) {
+          prev.description += '\n\n' + curr.description;
+          prev.description = prev.description.trim();
+        }
+        prev.status = this.getStatus(prev.startTime, prev.endTime);
+      } else {
+        toUpdateEvents.push(curr);
+        prev = curr;
+      }
+    }
+    // Delete Events merged
+    await Promise.all(
+      [...toRemoveEvents].map(async (e) => await this.removeEvent(e)),
+    );
+    // Create new Event is marked
+    const res = await Promise.all(
+      toUpdateEvents.map(async (event) => {
+        if (event.createdAt) {
+          return event;
+        }
+        const createEventDto: CreateEventDto = {
+          title: event.title,
+          description: event.description,
+          status: event.status,
+          startTime: event.startTime,
+          endTime: event.endTime,
+          invitees: event.invitees.map((e) => e.id),
+        };
+        return await this.createEvent(createEventDto);
+      }),
+    );
+    return res;
+  }
+
+  private getStatus(startTime: Date, endTime: Date): StatusType {
+    const now = new Date();
+    if (startTime > now) {
+      return 'TODO';
+    }
+    if (endTime < now) {
+      return 'COMPLETED';
+    }
+    return 'IN_PROGRESS';
+  }
+}
