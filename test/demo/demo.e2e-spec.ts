@@ -218,7 +218,6 @@ describe('[Feature] Demo - /v1/demo', () => {
           .send({ ...event3, invitees: [user1Id] })
           .expect(HttpStatus.CREATED);
         expect(body).toEqual(expectedEvent3);
-        event3Id = body.id;
       });
     });
     describe('otherwise', () => {

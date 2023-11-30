@@ -149,17 +149,17 @@ export class DemoService {
         prev = curr;
         isPrevRemove = false;
       }
-      if (isPrevRemove) {
-        const createEvent = {
-          title: prev.title,
-          description: prev.description,
-          status: prev.status,
-          startTime: prev.startTime,
-          endTime: prev.endTime,
-          invitees: prev.invitees,
-        };
-        toCreateEvents.push(createEvent);
-      }
+    }
+    if (isPrevRemove) {
+      const createEvent = {
+        title: prev.title,
+        description: prev.description,
+        status: prev.status,
+        startTime: prev.startTime,
+        endTime: prev.endTime,
+        invitees: prev.invitees,
+      };
+      toCreateEvents.push(createEvent);
     }
     // Add Remove merged Events to Transaction
     await Promise.all(
